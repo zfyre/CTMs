@@ -1,0 +1,7 @@
+        # Reason why NO! layernorm in Q and yet in KV
+        # - The keys and values come from the feature backbone (e.g., ResNet or encoder), and are fixed for the entire CTM thought process.
+        # - Prevents certain tokens from dominating due to scale variations.
+        # - Is safe because KV doesn't change across ticks — normalization won’t interfere with temporal learning.
+
+        # Q vector evolves at every internal tick — it's part of CTM’s internal dynamics
+        # & adding layer norm to queires might wash out or suppress important timing-based features.
