@@ -8,7 +8,7 @@ import torch.nn as nn
 
 class BackBone(nn.Module):
     def __init__(self, d_input: int):
-        super(BackBone).__init__()
+        super(BackBone, self).__init__()
 
         self.d_input = d_input
         self.simple = nn.Sequential(
@@ -50,7 +50,7 @@ class Squeeze(nn.Module):
 class SuperLinear(nn.Module):
     """SuperLinear Layer: Implements Neuron-Level Models (NLMs) for the CTM."""
     def __init__(self, in_dims, out_dims, N):
-        super().__init__()
+        super(SuperLinear, self).__init__()
         self.in_dims = in_dims
         self.register_parameter('w1', nn.Parameter(
             torch.empty((in_dims, out_dims, N)).uniform_(
@@ -68,7 +68,7 @@ class SuperLinear(nn.Module):
 
 class NLM(nn.Module):
     def __init__(self, d_model:int, d_memory: int, memory_hidden_dims: int = 8):
-        super(NLM).__init__()
+        super(NLM, self).__init__()
 
         self.d_model = d_model
         self.d_memory = d_memory
@@ -87,8 +87,9 @@ class NLM(nn.Module):
 
 class Synapses(nn.Module):
     def __init__(self, d_model: int):
+        super(Synapses, self).__init__()
         self.d_model = d_model
-
+        
         self.simple = nn.Sequential(
             nn.LazyLinear(2*d_model), # [d_model + d_input] -> [2*d_model]
             nn.GLU(),

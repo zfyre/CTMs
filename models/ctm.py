@@ -2,7 +2,7 @@ import math
 import torch
 import numpy as np
 import torch.nn as nn
-from typing import Optional
+from typing import Optional, Type
 
 from utils import compute_normalized_entropy
 
@@ -17,20 +17,20 @@ class ContinousThoughtMachine(nn.Module):
         n_heads: int,                                   # number of heads for the attention
         d_output: int,                                  # output dimension
         
-        backbone: nn.Module,
-        neuron_lvl_model: nn.Module,
-        synapse_model: nn.Module,
+        backbone: Type[nn.Module],
+        neuron_lvl_model: Type[nn.Module],
+        synapse_model: Type[nn.Module],
         
         dropout: float = 0,
-        # synapse_depth: int = 2,                         # UNET if > q else MLP
+        # synapse_depth: int = 2,                       # UNET if > q else MLP
         # dropout_nlm: Optional[float] = None,
-        # is_deep_nlms: bool = True,                      # Use deep NLMs as a default
+        # is_deep_nlms: bool = True,                    # Use deep NLMs as a default
         # is_layernorm_nlm: bool = True,
-        # hidden_dims_nlm: Optional[int] = 32,            # number of hidden dimensions if deep-nlms 
+        # hidden_dims_nlm: Optional[int] = 32,          # number of hidden dimensions if deep-nlms 
         neuron_selection_type: str = 'random-pairing',
         n_random_pairing_self: int = 0                  # Number of neurons to select for self-to-self synch when random-pairing is used.
     ):
-        super(ContinousThoughtMachine).__init__()
+        super(ContinousThoughtMachine, self).__init__()
         # --- Core Parameters ---
 
         # Model Neuron Parameters 
@@ -47,7 +47,7 @@ class ContinousThoughtMachine(nn.Module):
         self.n_heads = n_heads
 
         # --- Input and Attention ---
-        self.backbone: nn.Module = self.get_backbone(backbone) # Initialzing the Backbone for Input
+        self.backbone: nn.Module = backbone(self.d_input)
 
         # Initializing the Q and KV projectors, and attention Module
         self.q_proj = nn.LazyLinear(self.d_input) # Initializes a weight matrix with [... , d_input] & works on the Synchronized Embeddings
@@ -60,22 +60,21 @@ class ContinousThoughtMachine(nn.Module):
         ) # This module uses W_q, W_k, W_v internally and projects to embed_dim Check the forward() method for more!
 
         # --- Core CTM Modules ---
-        self.synapses: nn.Module = self.get_synapses(synapses=synapse_model)
-        self.history_processor: nn.Module = self.get_nlms(d_model, d_memory, neuron_lvl_model)
-
+        self.synapses: nn.Module = synapse_model(self.d_model)
+        self.history_processor: nn.Module = neuron_lvl_model(self.d_model, self.d_memory)
 
         # --- Init Pre-activations & their history/trace as params ---
         # variance-scaled uniform initialization!! A practical methods to keep gradients stable
-        self.register_parameter('initial_activated_state', nn.Parameter(torch.zeros((d_model)).uniform_(-math.sqrt(1/(d_model)), math.sqrt(1/(d_model)))))
-        self.register_parameter('initial_activation_history', nn.Parameter(torch.zeros((d_model, d_memory)).uniform_(-math.sqrt(1/(d_model+d_memory)), math.sqrt(1/(d_model+d_memory)))))
+        self.register_parameter('initial_activated_state', nn.Parameter(torch.zeros((d_model)).uniform_(-math.sqrt(1/(d_model)), math.sqrt(1/(d_model))), requires_grad=True))
+        self.register_parameter('initial_activation_history', nn.Parameter(torch.zeros((d_model, d_memory)).uniform_(-math.sqrt(1/(d_model+d_memory)), math.sqrt(1/(d_model+d_memory))), requires_grad=True))
 
         # --- Synchronization ---
 
         self.neuron_select_type = neuron_selection_type
         
         # Calculate the repr size based on 'neuron_selection_type' & 'sync_type'
-        self.sync_representation_size_action = self.calculate_sync_representation_size(self.n_synch_action)
-        self.sync_representation_size_out = self.calculate_sync_representation_size(self.n_synch_out)
+        self.sync_representation_size_action = self.calculate_sync_representation_size(self.n_sync_action)
+        self.sync_representation_size_out = self.calculate_sync_representation_size(self.n_sync_out)
         
         # DEBUG
         for synch_type, size in (('action', self.sync_representation_size_action), ('out', self.sync_representation_size_out)):
@@ -89,16 +88,6 @@ class ContinousThoughtMachine(nn.Module):
         # --- Output Projections ---
         self.d_output = d_output
         self.out_proj = nn.Sequential(nn.LazyLinear(self.d_output)) # No layer norm here? TODO: Check this
-
-    def get_backbone(self, backbone: nn.Module) -> nn.Module:
-        return backbone(self.d_input)
-
-    def get_synapses(self, synapses: nn.Module)-> nn.Module:
-        return synapses(self.d_model)
-
-    def get_nlms(self, d_model: int, d_memory: int, nlm_model: nn.Module) -> nn.Module:
-        nlm = nlm_model(d_model, d_memory)
-        return nlm
 
     def calculate_sync_representation_size(self, n_sync):
         """
@@ -221,7 +210,7 @@ class ContinousThoughtMachine(nn.Module):
         pre_activations_tracking = []
         post_activation_tracking = []
         attention_tracking = []
-        sync_out_tracking = []          #TODO: find out how is this useful
+        sync_out_tracking = []          #TODO: find out how is this useful -> How one neuron activation impacts other neuron's acivations
         sync_action_tracking = []       #TODO: find out how is this useful
         
         # --- Getting the KV for STATIC input data --- # NOTE for dynamic data this has to be either cached or computed at each tick!
@@ -229,9 +218,10 @@ class ContinousThoughtMachine(nn.Module):
         # This is what typically cached for speed-ups
 
         # --- Initialize the temporal states z_0 & A_0---
-        activated_state = self.get_parameter('initial_activated_state') # (B, d_model)
+        # NOTE We are using expand instead of repeat as done in loss_mnist fn because here the dimension to be expanded is 1 and since expand works on dim=1 so that it does'nt have to assign new memory, the memory is kept same as that of initial.
+        activated_state = self.get_parameter('initial_activated_state').unsqueeze(0).expand((B, -1)) # (B, d_model)
         # pre_activation_history = self.get_parameter('initial_activation_history') # (B, d_model, d_mem)
-        pre_activation_history = self.initial_activation_history # (B, d_model, d_mem) -> NOTE: used the self.'...' instead of above becuase of Tensor being assigned to a Parameter and LSP giving weird errors, techinically it's same!
+        pre_activation_history = self.initial_activation_history.unsqueeze(0).expand((B, -1, -1)) # (B, d_model, d_mem) -> NOTE: used the self.'...' instead of above becuase of Tensor being assigned to a Parameter and LSP giving weird errors, techinically it's same!
 
         # --- Storage for Predictions & Certainty used later for loss ---
         predictions = torch.empty((B, self.d_output, self.n_ticks), dtype=x.dtype, device=device)
@@ -240,11 +230,9 @@ class ContinousThoughtMachine(nn.Module):
         # --- Initialize Recurrent synchronization parameters ---
         decay_alpha_action, decay_beta_action = None, None # will be initialized automatically
 
-        # initialize the learnable decay parameters and clamp the exp between [e^-0, e^-15]: NOTE: 15 is hyperparameter
-        self.get_parameter('decay_params_action').clamp(0, 15) 
-        self.get_parameter('decay_params_out').clamp(0, 15)
-        # self.get_parameter('decay_params_action').data = torch.clamp(self.get_parameter('decay_params_action'), 0, 15)  # Fix from github user: kuviki
-        # self.get_parameter('decay_params_out').data = torch.clamp(self.get_parameter('decay_params_out'), 0, 15)
+        # initialize the learnable decay parameters and clamp the exp between [e^-0, e^-15]: NOTE: 15 is hyperparameter & NOTE Since we are clamping the data, we are not calling the ClampBackwards function during the update
+        self.get_parameter('decay_params_action').data = self.get_parameter('decay_params_action').clamp(0, 15) 
+        self.get_parameter('decay_params_out').data = self.get_parameter('decay_params_out').clamp(0, 15)
 
         # r_actions and r_out are the exp decay factors
         r_action, r_out = torch.exp(-self.decay_params_action).unsqueeze(0).repeat(B, 1), torch.exp(-self.decay_params_out).unsqueeze(0).repeat(B, 1)
@@ -257,7 +245,6 @@ class ContinousThoughtMachine(nn.Module):
             # --- Calculate the Synchronization Action --- 
             sync_action, decay_alpha_action, decay_beta_action = self.compute_synchronisation(activated_state, decay_alpha_action, decay_beta_action, r_action, sync_type='action')
             # sync_action (S_action): (B, sync_action_repr_size)
-
             # --- Apply Cross-Attention of Synchronized Action & input data ---
             q = self.q_proj(sync_action).unsqueeze(1) # (B, 1, d_input) -> projecting the flattened synchronized action to d_input shape
             attn_out, attn_weights = self.attention(q, kv, kv, average_attn_weights=False, need_weights=True) # Returns the attention weights perhead w/o averaging, shapes are (B, C=1, d_input), (B, n_head, C=1, H*W/seq_len)
@@ -266,7 +253,7 @@ class ContinousThoughtMachine(nn.Module):
 
             # --- Apply Synapse ---
             pre_activation = self.synapses(pre_synapse_input) # (B, d_model)
-            pre_activation_history = torch.cat((pre_activation_history[:, :, 1:], pre_activation.unsqueeze(-1)))
+            pre_activation_history = torch.cat((pre_activation_history[:, :, 1:], pre_activation.unsqueeze(-1)), dim=-1)
 
             # --- Apply NLMs / History Processor ---
             activated_state = self.history_processor(pre_activation_history) # (B, d_model)
