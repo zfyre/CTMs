@@ -40,6 +40,8 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.0001)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--num_ticks", type=int, default=30)
+    parser.add_argument("--num_memory", type=int, default=15)
     args = parser.parse_args()
 
     device = torch.device(args.device)
@@ -56,10 +58,11 @@ if __name__ == "__main__":
     trainloader, testloader = prepare_data(args.name, args.batch_size, args.path)
 
     # --- Prepare Model ---
+    assert(args.num_ticks >= args.num_memory)
     model = ContinousThoughtMachine(
-        n_ticks = 30,
+        n_ticks = args.num_ticks,
         d_model = 128,
-        d_memory = 15,
+        d_memory = args.num_memory,
         n_sync_out = 64,
         n_sync_action = 64,
         d_input = 32,

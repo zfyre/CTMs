@@ -280,7 +280,7 @@ class ContinousThoughtMachine(nn.Module):
         # --- Return Values ---
         if track:
             return predictions, certainties, (np.array(pre_activations_tracking)), (np.array(post_activation_tracking)), (np.array(attention_tracking)), (np.array(sync_action_tracking)), (np.array(sync_out_tracking))
-        return predictions, certainties
+        return predictions, certainties, (self.get_parameter('decay_params_action').data, self.get_parameter('decay_params_out').data)
         
 
 

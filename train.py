@@ -25,7 +25,7 @@ def train(
             inputs, targets = next(iter(train_loader))
             # print("Inputs: ", inputs.shape)
             inputs, targets = inputs.to(device), targets.to(device) # Offloading the batch to GPU
-            predictions, certainities = model(inputs, track=False)
+            predictions, certainities, (decay_action, decay_out) = model(inputs, track=False)
             train_loss, most_certain_tick = loss_mnist_(predictions, certainities, targets)
             train_accuracy = calculate_accuracy(predictions, targets, most_certain_tick)
 
@@ -43,7 +43,7 @@ def train(
 
                     for inputs, targets in test_loader:
                         inputs, targets = inputs.to(device), targets.to(device)
-                        predictions, certainties = model(inputs, track=False)
+                        predictions, certainties, _ = model(inputs, track=False)
                         test_loss, where_most_certain = loss_mnist_(predictions, certainties, targets)
                         all_test_losses.append(test_loss.item())
 
@@ -59,7 +59,7 @@ def train(
                     test_accuracy = calculate_accuracy(all_test_predictions, all_test_targets, all_test_where_most_certain)
                     test_loss = sum(all_test_losses) / len(all_test_losses)
                 model.train()
-            pbar.set_description(f'Train Loss: {train_loss:.3f}, Train Accuracy: {train_accuracy:.3f} Test Loss: {test_loss:.3f}, Test Accuracy: {test_accuracy:.3f}')
+            pbar.set_description(f'Train Loss: {train_loss:.3f}, Train Accuracy: {train_accuracy:.3f} Test Loss: {test_loss:.3f}, Test Accuracy: {test_accuracy:.3f}, Decay Params: {decay_action.max():.3f}, {decay_out.max():.3f}')
             pbar.update(1)
 
     return model
