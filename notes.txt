@@ -5,3 +5,5 @@
 
         # Q vector evolves at every internal tick — it's part of CTM’s internal dynamics
         # & adding layer norm to queires might wash out or suppress important timing-based features.
+
+	TODO: Add all the learning as well as observations here!
