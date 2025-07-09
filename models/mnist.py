@@ -4,14 +4,97 @@ Contains the NLMs, Synapse and Backbone Models for MNIST
 import math
 import torch
 import torch.nn as nn
+from typing import Tuple
 
+class UNET(nn.Module):
+    def __init__(self, in_channels: int = 3) -> None:
+        super(UNET, self).__init__()
+
+        self.conv_channels = [64, 128, 256, 512]
+
+        self.conv1 = nn.ModuleList([
+            nn.Sequential(
+                nn.LazyConv2d(channels, kernel_size=3),
+                nn.ReLU(),
+                nn.Conv2d(channels, channels, kernel_size=3),
+                nn.ReLU()
+            )
+            for channels in self.conv_channels
+        ])
+        self.bottleneck = nn.Sequential(
+            nn.Sequential(
+                nn.LazyConv2d(1024, kernel_size=3),
+                nn.ReLU(),
+                nn.Conv2d(1024, 1024, kernel_size=3),
+                nn.ReLU()
+            )
+        )
+        self.maxpool = nn.MaxPool2d(kernel_size=2) # (H, W) -> (H//2, W//2)
+        self.up_conv = nn.ModuleList([
+            nn.LazyConvTranspose2d(channels, kernel_size=2, stride=2) 
+            for channels in reversed(self.conv_channels)
+        ])
+        self.conv2 = nn.ModuleList([
+            nn.Sequential(
+                nn.LazyConv2d(channels, kernel_size=3),
+                nn.ReLU(),
+                nn.Conv2d(channels, channels, kernel_size=3),
+                nn.ReLU()
+            )
+            for channels in reversed(self.conv_channels)
+        ])
+        self.fc = nn.LazyConv2d(in_channels, kernel_size=1)
+
+    def _get_crop_idx(self, init_shape: Tuple[int, int], fin_shape: Tuple[int, int]):
+        start = tuple((init_i - fin_i) // 2 for init_i, fin_i in zip(init_shape, fin_shape))
+        end = tuple(start_i + fin_i for start_i, fin_i in zip(start, fin_shape))
+        return start, end
+
+    def forward(self, x: torch.Tensor):
+
+        skip_conn = []
+
+        # Down
+        for conv in self.conv1:
+            x_skip = conv(x)
+            skip_conn.append(x_skip)
+            x = self.maxpool(x_skip)
+
+        # Bottleneck
+        x = self.bottleneck(x)
+
+        # Up
+        for (conv, conv_transpose, x_skipped) in zip(self.conv2, self.up_conv, reversed(skip_conn)):
+
+            # Upsample the current x
+            upsampled_x = conv_transpose(x)
+
+            # Cropped the x_skipped to upsampled_x dim TODO: Better would to rather resize, what if the upsampled is bigger?!
+            _, _, h, w = upsampled_x.shape
+            _, _, H, W = x_skipped.shape
+            start, end = self._get_crop_idx(init_shape=(H,W), fin_shape=(h, w))
+            x_skipped_cropped = x_skipped[:, :, (start[0]):(end[0]), (start[1]):(end[1])]
+
+            # Concatenate along the channel dims & update
+            x = torch.concat([
+                upsampled_x,
+                x_skipped_cropped
+            ], dim=1)
+
+            # Apply the final conv
+            x = conv(x)
+
+        # Final Layer
+        x = self.fc(x)
+
+        return x
 
 class BackBone(nn.Module):
     def __init__(self, d_input: int):
         super(BackBone, self).__init__()
 
         self.d_input = d_input
-        self.simple = nn.Sequential(
+        self.simple = nn.Sequential( # Across these layers the Height and Weight remains same by design
             nn.LazyConv2d(d_input, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(d_input),
             nn.ReLU(),

@@ -26,4 +26,9 @@ def calculate_accuracy(predictions_logits: torch.Tensor, targets: torch.Tensor, 
 
     return accuracy
     
-    
+def visualize_attention_map_with_images():
+    # STEP1: Get the output of an image from the Model, along with the attention maps for all heads per ticks along with certainities & predictions
+    # STEP2: Unroll the attention weights and rehape it from H*W to (H, W).
+    # STEP3: Perstep get the average pixel of attention across all the weights and mark it as a point
+    # STEP4: display all these traces and attention maps along with image for all the ticks along with the preds and certainities
+    pass

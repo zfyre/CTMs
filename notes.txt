@@ -7,3 +7,10 @@
         # & adding layer norm to queires might wash out or suppress important timing-based features.
 
 	TODO: Add all the learning as well as observations here!
+
+
+
+
+	Experiments:
+
+	1. To test the similar structure in Language Modelling, start by training a text classifier

@@ -21,6 +21,7 @@ def train(
     with tqdm(total=num_iteration, initial=0, dynamic_ncols=True) as pbar:
         test_loss = None
         test_accuracy = None
+        train_losses_list = []
         for step in range(num_iteration):
             inputs, targets = next(iter(train_loader))
             # print("Inputs: ", inputs.shape)
@@ -59,7 +60,10 @@ def train(
                     test_accuracy = calculate_accuracy(all_test_predictions, all_test_targets, all_test_where_most_certain)
                     test_loss = sum(all_test_losses) / len(all_test_losses)
                 model.train()
+            
+            train_losses_list.append(train_loss.item())
+            
             pbar.set_description(f'Train Loss: {train_loss:.3f}, Train Accuracy: {train_accuracy:.3f} Test Loss: {test_loss:.3f}, Test Accuracy: {test_accuracy:.3f}, Decay Params: {decay_action.max():.3f}, {decay_out.max():.3f}')
             pbar.update(1)
 
-    return model
+    return model, (train_losses_list, )
