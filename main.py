@@ -48,7 +48,10 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     if device.type == "cuda":
         torch.cuda.manual_seed(args.seed)
-
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+    
     # --- Prepare Data ---
     trainloader, testloader = prepare_data(args.name, args.batch_size, args.path)
 
