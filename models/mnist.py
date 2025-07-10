@@ -4,29 +4,36 @@ Contains the NLMs, Synapse and Backbone Models for MNIST
 import math
 import torch
 import torch.nn as nn
-from typing import Tuple
+from typing import List, Optional, Tuple
 
 class UNET(nn.Module):
-    def __init__(self, in_channels: int = 3) -> None:
+    def __init__(self, fin_num_channels: int = 3, conv_channels: Optional[List] = None) -> None:
         super(UNET, self).__init__()
 
-        self.conv_channels = [64, 128, 256, 512]
+        self.conv_channels = [64, 128, 256, 512] if conv_channels is None else conv_channels
 
         self.conv1 = nn.ModuleList([
             nn.Sequential(
-                nn.LazyConv2d(channels, kernel_size=3),
+                nn.LazyConv2d(channels, kernel_size=3, padding=1),
+                nn.LazyBatchNorm2d(),
                 nn.ReLU(),
-                nn.Conv2d(channels, channels, kernel_size=3),
-                nn.ReLU()
+                # TODO: Is batchnorm required?
+                nn.Conv2d(channels, channels, kernel_size=3, padding=1),
+                nn.LazyBatchNorm2d(),
+                nn.ReLU(),
             )
             for channels in self.conv_channels
         ])
+
+        self.dim_bn = self.conv_channels[-1] * 2
         self.bottleneck = nn.Sequential(
             nn.Sequential(
-                nn.LazyConv2d(1024, kernel_size=3),
+                nn.LazyConv2d(self.dim_bn, kernel_size=3, padding=1),
+                nn.LazyBatchNorm2d(),
                 nn.ReLU(),
-                nn.Conv2d(1024, 1024, kernel_size=3),
-                nn.ReLU()
+                nn.Conv2d(self.dim_bn, self.dim_bn, kernel_size=3, padding=1),
+                nn.LazyBatchNorm2d(),
+                nn.ReLU(),
             )
         )
         self.maxpool = nn.MaxPool2d(kernel_size=2) # (H, W) -> (H//2, W//2)
@@ -36,14 +43,16 @@ class UNET(nn.Module):
         ])
         self.conv2 = nn.ModuleList([
             nn.Sequential(
-                nn.LazyConv2d(channels, kernel_size=3),
+                nn.LazyConv2d(channels, kernel_size=3, padding=1),
+                nn.LazyBatchNorm2d(),
                 nn.ReLU(),
-                nn.Conv2d(channels, channels, kernel_size=3),
+                nn.Conv2d(channels, channels, kernel_size=3, padding=1),
+                nn.LazyBatchNorm2d(),
                 nn.ReLU()
             )
             for channels in reversed(self.conv_channels)
         ])
-        self.fc = nn.LazyConv2d(in_channels, kernel_size=1)
+        self.fc = nn.LazyConv2d(fin_num_channels, kernel_size=1)
 
     def _get_crop_idx(self, init_shape: Tuple[int, int], fin_shape: Tuple[int, int]):
         start = tuple((init_i - fin_i) // 2 for init_i, fin_i in zip(init_shape, fin_shape))
@@ -59,7 +68,6 @@ class UNET(nn.Module):
             x_skip = conv(x)
             skip_conn.append(x_skip)
             x = self.maxpool(x_skip)
-
         # Bottleneck
         x = self.bottleneck(x)
 
@@ -68,7 +76,6 @@ class UNET(nn.Module):
 
             # Upsample the current x
             upsampled_x = conv_transpose(x)
-
             # Cropped the x_skipped to upsampled_x dim TODO: Better would to rather resize, what if the upsampled is bigger?!
             _, _, h, w = upsampled_x.shape
             _, _, H, W = x_skipped.shape
@@ -80,7 +87,7 @@ class UNET(nn.Module):
                 upsampled_x,
                 x_skipped_cropped
             ], dim=1)
-
+            
             # Apply the final conv
             x = conv(x)
 
@@ -94,6 +101,7 @@ class BackBone(nn.Module):
         super(BackBone, self).__init__()
 
         self.d_input = d_input
+        self.unet = UNET(fin_num_channels=d_input)
         self.simple = nn.Sequential( # Across these layers the Height and Weight remains same by design
             nn.LazyConv2d(d_input, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(d_input),
@@ -105,11 +113,12 @@ class BackBone(nn.Module):
             nn.MaxPool2d(2, 2),
         )
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, use_unet: bool = False):
         # x: (B, C, H, W) -> (B, d_input, h, w)
         # NOTE If h==H & w==W then each "patch" is just a pixel, hence easy to visualize the attention.
         # NOTE We output the number of channels equal to the CTM d_input even though we are applying kV projection there because typically in transformers also while calculating the KV the token embeddings dimensions are kept same
-
+        if use_unet:
+            return self.unet(x)
         return self.simple(x)
 
 

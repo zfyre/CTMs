@@ -193,7 +193,7 @@ class ContinousThoughtMachine(nn.Module):
     
     def compute_kv(self, x: torch.Tensor):
         # x.shape : (B, C, H, W) OR (B, emb, seq_len)
-        input_features: torch.Tensor = self.backbone(x)
+        input_features: torch.Tensor = self.backbone(x, True) # TODO: Make is more elegant the use of UNET
         kv = self.kv_proj(
             input_features
                 .flatten(start_dim=2) # (B, C, H*W) OR (B, emb, seq_len)
@@ -279,8 +279,18 @@ class ContinousThoughtMachine(nn.Module):
         
         # --- Return Values ---
         if track:
-            return predictions, certainties, (np.array(pre_activations_tracking)), (np.array(post_activation_tracking)), (np.array(attention_tracking)), (np.array(sync_action_tracking)), (np.array(sync_out_tracking))
-        return predictions, certainties, (self.get_parameter('decay_params_action').data, self.get_parameter('decay_params_out').data)
+            return predictions, certainties, (
+                np.array(pre_activations_tracking),
+                np.array(post_activation_tracking),
+                np.array(attention_tracking),
+                np.array(sync_action_tracking),
+                np.array(sync_out_tracking)
+            )
+
+        return predictions, certainties, (
+            self.get_parameter('decay_params_action').data,
+            self.get_parameter('decay_params_out').data
+        )
         
 
 

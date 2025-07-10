@@ -3,39 +3,10 @@ import argparse
 # import matplotlib
 # matplotlib.use('Agg')  # Use Anti-Grain Geometry backend (no GUI)
 import matplotlib.pyplot as plt
-from torchvision import datasets, transforms
 from models.ctm import ContinousThoughtMachine
 from models.mnist import BackBone, NLM, Synapses
+from utils import prepare_data
 from train import train
-
-
-def prepare_data(name, batch_size, path = "./data"):
-    
-    if name == 'MNIST':
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-        ])
-        train_data = datasets.MNIST(root=path, train=True, download=True, transform=transform)
-        test_data = datasets.MNIST(root=path, train=False, download=True, transform=transform)
-        trainloader = torch.utils.data.DataLoader(train_data, batch_size, shuffle=True, num_workers=1)
-        testloader = torch.utils.data.DataLoader(test_data, batch_size, shuffle=True, num_workers=1, drop_last=False)
-        return trainloader, testloader
-    elif name == 'CIFAR10':
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.4914, 0.4822, 0.4465],
-                std=[0.2470, 0.2435, 0.2616]
-            )
-        ])
-        train_data = datasets.CIFAR10(root=path, train=True, download=True, transform=transform)
-        test_data = datasets.CIFAR10(root=path, train=False, download=True, transform=transform)
-        trainloader = torch.utils.data.DataLoader(train_data, batch_size, shuffle=True, num_workers=1)
-        testloader = torch.utils.data.DataLoader(test_data, batch_size, shuffle=True, num_workers=1, drop_last=False)
-        return trainloader, testloader
-    else:
-        raise ValueError(f"Dataset {name} not found")
-
 
 if __name__ == "__main__":
 
