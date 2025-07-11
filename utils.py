@@ -1,12 +1,13 @@
-import io
-import os
 import torch
 import imageio
 import numpy as np
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
-
+import cv2
+import imageio
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 def prepare_data(name, batch_size, path = "./data"):
     
@@ -59,108 +60,195 @@ def calculate_accuracy(predictions_logits: torch.Tensor, targets: torch.Tensor, 
 
     return accuracy
     
-def visualize_attention_map_with_images(model, input, label, label_text, device):
-    # STEP3: Perstep get the average pixel of attention across all the weights and mark it as a point
-    # STEP4: display all these traces and attention maps along with image for all the ticks along with the preds and certainities
+def visualize_attention_map_with_images(model, input, label, label_text, device, path):
     
-    # STEP1: Get the output of an image from the Model, along with the attention maps for all heads per ticks along with certainities & predictions
+    if device == "cuda":
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    import os
+    if not os.path.exists(path):
+        os.mkdir(path)
+
+    total_len = input.shape[0]
+    assert label.shape[0] == total_len, "Number of Labels must be equal to number of inputs"
+
     model = model.to(device)
     model.eval()
     predictions, certainties, (
         pre_activations_tracking,
         post_activation_tracking,
-        attention_tracking,
+        attention_tracking,             # [n_ticks, B, n_heads, n_channel, H*W]
         sync_action_tracking,
         sync_out_tracking
     ) = model(input.to(device), track=True)
-    
-    # Visualize the Certainities & Prediction with Ticks
     predictions = predictions.detach()
     certainties = certainties.detach()
-    create_prediction_certainty_gif(input, predictions, certainties, label, label_text, 'output.gif')
 
-    # STEP2: Unroll the attention weights and reshape it from H*W to (H, W).
+    n_ticks, B, n_heads, C, seq_len = attention_tracking.shape
+    print("Attention Shape: ", attention_tracking.shape)
+    H = int(seq_len ** 0.5)
+    while seq_len % H != 0: H -= 1
+    W = seq_len // H # To make compensate for non-square seq length
+    attention_tracking = np.reshape(attention_tracking, [n_ticks, B, n_heads, C, H, W])
+    #TODO: Interpolate the attention if not square ?? but why??
+        
+    for idx in range(total_len):
+        create_gif(
+            image=input[idx],
+            predictions=predictions[idx],
+            certainties=certainties[idx],
+            attention_tracks=attention_tracking[:, idx, :, :, :],
+            label=label[idx],
+            label_text=label_text,
+            gif_path=f'{path}/output_{idx}.gif',
+            fps=int(attention_tracking.shape[0]/(2.8)),
+        )
+
+def create_gif(
+    image,
+    predictions,
+    certainties,
+    attention_tracks,
+    label,
+    label_text,
+    gif_path,
+    fps=10,
+    max_heads=4
+):
+    num_classes, n_ticks = predictions.shape
+    n_heads = attention_tracks.shape[1]
+    H, W = attention_tracks.shape[-2:]
+
+    # Unnormalize and prepare image
+    mean = np.array([0.4914, 0.4822, 0.4465]).reshape(3, 1, 1)
+    std = np.array([0.2023, 0.1994, 0.2010]).reshape(3, 1, 1)
+    img_tensor = image.cpu().numpy()
+    img = (img_tensor * std + mean).transpose(1, 2, 0)
+    img = np.clip(img * 255, 0, 255).astype(np.uint8)
     
-
-def create_prediction_certainty_gif(image, predictions, certainties, label, label_text, gif_path, fps=5):
-    """
-    Creates a GIF showing input image, class predictions (bar chart), and certainty (line graph) over time.
+    # Keep original image size for better quality
+    RESIZED_X = 32
+    RESIZED_Y = 32
     
-    Args:
-        image: Tensor of shape [B, 3, H, W], assumed to be normalized as in CIFAR10.
-        predictions: Tensor of shape [B, num_classes, n_ticks]
-        certainties: Tensor of shape [B, 2, n_ticks]
-        label: Tensor of shape [B, 1] or [B]
-        gif_path: Path to save the output GIF
-        fps: Frames per second for the GIF
-    """
-    # === Unpack shapes ===
-    B, num_classes, n_ticks = predictions.shape
-    assert B == 1, "Only supports batch size of 1"
-    
-    # === Unnormalize image ===
-    mean = [0.4914, 0.4822, 0.4465]
-    std = [0.2023, 0.1994, 0.2010]
-    img_tensor = image[0].cpu().clone()
-    for t, m, s in zip(img_tensor, mean, std):
-        t.mul_(s).add_(m)
-    img = img_tensor.permute(1, 2, 0).numpy()
-    img = np.clip(img, 0, 1)  # Ensure values in [0, 1] for display
+    img_resized = cv2.resize(img, (RESIZED_X, RESIZED_Y))
 
-    # === Extract prediction and certainty info ===
-    pred = F.softmax(predictions[0], dim=0).cpu().numpy()   # [num_classes, n_ticks]
-    cert = certainties[0, 1].cpu().numpy()                  # [n_ticks]
-    correct_class = int(label[0])                           # scalar
+    pred = F.softmax(predictions, dim=0).cpu().numpy()  # [num_classes, n_ticks]
+    cert = certainties[1].cpu().numpy()  # [n_ticks]
+    correct_class = int(label)
 
+    # path_coords = []
     frames = []
 
     for t in range(n_ticks):
-        fig = plt.figure(figsize=(9, 6))
-        gs = fig.add_gridspec(2, 2, width_ratios=[1, 2], height_ratios=[2, 1])
-
-        # === Show image ===
-        ax_img = fig.add_subplot(gs[:, 0])
-        ax_img.imshow(img)
-        ax_img.axis('off')
-        ax_img.set_title('Input Image')
-
-        # === Bar plot: predictions ===
-        ax1 = fig.add_subplot(gs[0, 1])
-        bar_colors = ['skyblue'] * num_classes
-        predicted_class = int(np.argmax(pred[:, t]))
+        # Create figure with tight layout and no padding
+        fig = plt.figure(figsize=(12, 6), dpi=100, facecolor='white')
+        fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05, wspace=0.15, hspace=0.15)
         
-        if predicted_class != correct_class:
-            bar_colors[predicted_class] = 'red'
-        bar_colors[correct_class] = 'green'  # Override to green if same
+        gs = fig.add_gridspec(2, 5, width_ratios=[1, 1, 1, 1, 1], height_ratios=[1, 1])
+
+        # Step 1: Input Image (top-left)
+        ax_img = fig.add_subplot(gs[0, 0])
+        base_img = img_resized.copy()
+
+        attn = attention_tracks[t]  # [n_heads, 1, H, W]
+        attn_heads = attn.squeeze(1)   # [n_heads, H, W]
+        # Normalize the attention
+        attn_heads_min = attn_heads.min(axis=(1, 2), keepdims=True)
+        attn_heads_max = attn_heads.max(axis=(1, 2), keepdims=True)
+        # print(attn_heads_max.shape)
+        attn_heads = (attn_heads - attn_heads_min)/(attn_heads_max - attn_heads_min)
+        # avg_attn = np.mean(attn_heads, axis=0) # [H, W]
+
+        # print(avg_attn)
+        # print(np.argmax(avg_attn))
+        # yx = np.unravel_index(np.argmax(avg_attn), avg_attn.shape)
+        # max_x, max_y = int(yx[1] * RESIZED_X / W), int(yx[0] * RESIZED_Y / H)
+        # path_coords.append((max_x, max_y))
+
+        # Draw attention path lines on the image
+        ax_img.imshow(base_img)
+        # if len(path_coords) > 1:
+        #     xs, ys = zip(*path_coords)
+        #     ax_img.plot(xs, ys, color='cyan', linewidth=2)
+        # # Draw current attention max point
+        # ax_img.scatter([max_x], [max_y], color='blue', s=50)
+        #
+        # ax_img.axis('off')
+        ax_img.set_title('Input Image', fontsize=12, pad=10)
+
+        # Step 2: Attention heatmaps (top-middle and top-right)
+        heads_to_show = min(n_heads, max_heads)
+        for i in range(heads_to_show):
+            row = i // 4
+            col = (i % 4) + 1  # Start from column 1 (after image)
+            # if col < 4:  # Only show first 4 heads in a 2x2 grid
+            ax_attn = fig.add_subplot(gs[row, col])
+            head_attn = attn_heads[i]
+            # Resize attention to match input image size for consistent aspect ratio
+            head_resized = cv2.resize(head_attn, (RESIZED_X, RESIZED_Y))
+            norm = cv2.normalize(head_resized, None, 0, 1, cv2.NORM_MINMAX)
+            
+            ax_attn.imshow(norm, cmap='viridis')
+            ax_attn.axis('off')
+            ax_attn.set_title(f'Head {i+1}', fontsize=10)
+
+        # If we have space, add a combined attention view
+        if heads_to_show <= 3:
+            ax_combined = fig.add_subplot(gs[0, 4])
+            combined_attn = np.mean(attn_heads[:heads_to_show], axis=0)
+            combined_resized = cv2.resize(combined_attn, (RESIZED_X, RESIZED_Y))
+            combined_norm = cv2.normalize(combined_resized, None, 0, 1, cv2.NORM_MINMAX)
+
+            ax_combined.imshow(combined_norm, cmap='jet')
+            ax_combined.axis('off')
+            ax_combined.set_title('Average Attention', fontsize=10)
+
+        # Step 3: Prediction bar chart (bottom-left and bottom-center)
+        ax_pred = fig.add_subplot(gs[1, 0:3])
+        bars = ax_pred.bar(range(num_classes), pred[:, t], color='lightgray')
+        bars[correct_class].set_color('green')
+        pred_class = np.argmax(pred[:, t])
+        if pred_class != correct_class:
+            bars[pred_class].set_color('red')
         
-        ax1.bar(range(num_classes), pred[:, t], color=bar_colors)
-        ax1.set_ylim(0, 1)
-        ax1.set_title(f'Log-Scaled Predictions at tick {t} (Label: {label_text[correct_class]})')
-        ax1.set_xlabel('Class')
-        ax1.set_ylabel('Prob')
-        ax1.set_xticks(range(num_classes))
-        ax1.set_xticklabels(label_text, rotation=45, ha='right', fontsize=8)
+        ax_pred.set_ylim(0, 1)
+        ax_pred.set_ylabel('Probability', fontsize=10)
+        ax_pred.set_title(f'Predictions (Tick {t})', fontsize=12)
+        ax_pred.set_xticks(range(num_classes))
+        ax_pred.set_xticklabels(label_text, rotation=0, fontsize=8, ha='center')
+        ax_pred.grid(True, alpha=0.3)
 
-        # === Line plot: certainty ===
-        ax2 = fig.add_subplot(gs[1, 1])
-        ax2.plot(range(t + 1), cert[:t + 1], color='orange')
-        ax2.set_xlim(0, n_ticks - 1)
-        ax2.set_ylim(0, 1)
-        ax2.set_title('Certainty over time')
-        ax2.set_xlabel('Tick')
-        ax2.set_ylabel('Certainty')
+        # Step 4: Certainty line chart (bottom-right)
+        ax_cert = fig.add_subplot(gs[1, 3:5])
+        ax_cert.set_xlim(0, n_ticks-1)
+        ax_cert.set_ylim(0, 1)
+        ax_cert.set_title('Certainty over Time', fontsize=12)
+        ax_cert.set_xlabel('Tick', fontsize=10)
+        ax_cert.set_ylabel('Certainty', fontsize=10)
+        ax_cert.grid(True, linestyle='--', alpha=0.3)
 
-        fig.tight_layout()
+        ax_cert.plot(range(t+1), cert[:t+1], color='orange', linewidth=2)
+        # Add current tick marker
+        if t < len(cert):
+            ax_cert.scatter([t], [cert[t]], color='red', s=50, zorder=5)
 
-        # Save frame to memory
-        buf = io.BytesIO()
-        fig.savefig(buf, format='png')
-        buf.seek(0)
-        frames.append(imageio.imread(buf))
-        buf.close()
+        # Convert to numpy array for GIF frame
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+        canvas = fig.canvas
+        if not isinstance(canvas, FigureCanvasAgg):
+            canvas = FigureCanvasAgg(fig)
+        canvas.draw()
+        buf = canvas.tostring_argb()
+        w, h = canvas.get_width_height()
+        img_array = np.frombuffer(buf, dtype=np.uint8).reshape(h, w, 4)
+        img_array = img_array[:, :, [1, 2, 3, 0]]  # ARGB -> RGBA
+        frame = img_array[:, :, :3]  # Drop alpha for RGB
+
         plt.close(fig)
+        frames.append(frame)
 
-    # === Save all frames into a gif ===
     imageio.mimsave(gif_path, frames, fps=fps)
     print(f"✅ GIF saved to {gif_path}")
-

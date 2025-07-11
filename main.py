@@ -39,12 +39,12 @@ if __name__ == "__main__":
     assert(args.num_ticks >= args.num_memory)
     model = ContinousThoughtMachine(
         n_ticks = args.num_ticks,
-        d_model = 256,
+        d_model = 300,
         d_memory = args.num_memory,
-        n_sync_out = 64,
-        n_sync_action = 64,
-        d_input = 32,
-        n_heads = 8,
+        n_sync_out = 80,
+        n_sync_action = 80,
+        d_input = 64,
+        n_heads = 4,
         d_output = 10, # for both MNIST & CIFAR10
 
         backbone = BackBone,
@@ -60,7 +60,7 @@ if __name__ == "__main__":
     model, (train_losses, ) = train(model=model, train_loader=trainloader, test_loader=testloader, num_iteration=args.iterations, learning_rate=args.lr, device=device)
     print("--- Training Complete ---")
     # --- Save Model ---
-    torch.save(model.state_dict(), f"{args.path}/ctm_{args.name.lower()}.pth")
+    torch.save(model.state_dict(), f"{args.path}/ctm_{args.name.lower()}ticks:{args.num_ticks}_mem:{args.num_memory}.pth")
     print(f"Model saved at {args.path}/ctm_{args.name.lower()}")
     # --- Visualization ---
     if train_losses and len(train_losses) > 0:
