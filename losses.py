@@ -23,8 +23,9 @@ def loss_mnist_(predictions_logits: torch.Tensor, certainities: torch.Tensor, ta
     # loss_t2 = losses[batch_indexer, loss_idx_2].mean()
 
     loss = (loss_t1 + loss_t2)/2
+    # loss = losses.mean() #NOTE: For testig what happens when we do this!
         
-    return loss, loss_idx_2
+    return loss, (loss_idx_1, loss_idx_2)
 
 
     

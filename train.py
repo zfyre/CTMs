@@ -19,15 +19,21 @@ def train(
 
     model.train()
     with tqdm(total=num_iteration, initial=0, dynamic_ncols=True) as pbar:
+        
+        # Training Results across iterations
+        train_losses_list = []
+        least_loss_tick_list = []
+        most_certain_tick_list = []
+
+
         test_loss = None
         test_accuracy = None
-        train_losses_list = []
         for step in range(num_iteration):
             inputs, targets = next(iter(train_loader))
             # print("Inputs: ", inputs.shape)
             inputs, targets = inputs.to(device), targets.to(device) # Offloading the batch to GPU
             predictions, certainities, (decay_action, decay_out) = model(inputs, track=False)
-            train_loss, most_certain_tick = loss_mnist_(predictions, certainities, targets)
+            train_loss, (least_loss_tick, most_certain_tick) = loss_mnist_(predictions, certainities, targets)
             train_accuracy = calculate_accuracy(predictions, targets, most_certain_tick)
 
             optim.zero_grad()
@@ -45,7 +51,7 @@ def train(
                     for inputs, targets in test_loader:
                         inputs, targets = inputs.to(device), targets.to(device)
                         predictions, certainties, _ = model(inputs, track=False)
-                        test_loss, where_most_certain = loss_mnist_(predictions, certainties, targets)
+                        test_loss, (_, where_most_certain) = loss_mnist_(predictions, certainties, targets)
                         all_test_losses.append(test_loss.item())
 
                         all_test_predictions.append(predictions)
@@ -62,8 +68,10 @@ def train(
                 model.train()
             
             train_losses_list.append(train_loss.item())
+            least_loss_tick_list.append(least_loss_tick.detach().cpu().numpy())
+            most_certain_tick_list.append(most_certain_tick.detach().cpu().numpy())
             
             pbar.set_description(f'Train Loss: {train_loss:.3f}, Train Accuracy: {train_accuracy:.3f} Test Loss: {test_loss:.3f}, Test Accuracy: {test_accuracy:.3f}, Decay Params: {decay_action.max():.3f}, {decay_out.max():.3f}')
             pbar.update(1)
 
-    return model, (train_losses_list, )
+    return model, (train_losses_list, least_loss_tick_list, most_certain_tick_list)

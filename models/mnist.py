@@ -97,29 +97,32 @@ class UNET(nn.Module):
         return x
 
 class BackBone(nn.Module):
-    def __init__(self, d_input: int):
+    def __init__(self, d_input: int, use_unet: bool):
         super(BackBone, self).__init__()
+        self.use_unet = use_unet
+        self._initialize(d_input)
 
+    def _initialize(self, d_input: int): # NOTE: Only takes arguments which will be modified by the CTM class!!
         self.d_input = d_input
-        self.unet = UNET(fin_num_channels=d_input)
-        self.simple = nn.Sequential( # Across these layers the Height and Weight remains same by design
-            nn.LazyConv2d(d_input, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(d_input),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-            nn.LazyConv2d(d_input, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(d_input),
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),
-        )
+        if self.use_unet:
+            self.model = UNET(fin_num_channels=self.d_input)
+        else:
+            self.model = nn.Sequential( # Across these layers the Height and Weight remains same by design
+                nn.LazyConv2d(self.d_input, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(self.d_input),
+                nn.ReLU(),
+                nn.MaxPool2d(2, 2),
+                nn.LazyConv2d(self.d_input, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(self.d_input),
+                nn.ReLU(),
+                nn.MaxPool2d(2, 2),
+            )
 
-    def forward(self, x: torch.Tensor, use_unet: bool = False):
+    def forward(self, x: torch.Tensor):
         # x: (B, C, H, W) -> (B, d_input, h, w)
         # NOTE If h==H & w==W then each "patch" is just a pixel, hence easy to visualize the attention.
         # NOTE We output the number of channels equal to the CTM d_input even though we are applying kV projection there because typically in transformers also while calculating the KV the token embeddings dimensions are kept same
-        if use_unet:
-            return self.unet(x)
-        return self.simple(x)
+        return self.model(x)
 
 
 class Identity(nn.Module):
@@ -161,14 +164,17 @@ class SuperLinear(nn.Module):
 class NLM(nn.Module):
     def __init__(self, d_model:int, d_memory: int, memory_hidden_dims: int = 8):
         super(NLM, self).__init__()
+        self.memory_hidden_dims = memory_hidden_dims
+        self._initialize(d_model, d_memory)
 
+    def _initialize(self, d_model:int, d_memory: int):
         self.d_model = d_model
         self.d_memory = d_memory
 
         self.history_processor = nn.Sequential(
-            SuperLinear(in_dims=d_memory, out_dims=2 * memory_hidden_dims, N=d_model),
+            SuperLinear(in_dims=d_memory, out_dims=2 * self.memory_hidden_dims, N=d_model),
             nn.GLU(),
-            SuperLinear(in_dims=memory_hidden_dims, out_dims=2, N=d_model),
+            SuperLinear(in_dims=self.memory_hidden_dims, out_dims=2, N=d_model),
             nn.GLU(),
             Squeeze(-1)
         )
@@ -180,6 +186,10 @@ class NLM(nn.Module):
 class Synapses(nn.Module):
     def __init__(self, d_model: int):
         super(Synapses, self).__init__()
+        
+        self._initialize(d_model)
+
+    def _initialize(self, d_model: int):
         self.d_model = d_model
         
         self.simple = nn.Sequential(
@@ -187,6 +197,7 @@ class Synapses(nn.Module):
             nn.GLU(),
             nn.LayerNorm(d_model)
         )
+
     def forward(self, x: torch.Tensor):
         return self.simple(x)
 

@@ -5,7 +5,7 @@ import torch.nn as nn
 from typing import Optional, Type
 
 from utils import compute_normalized_entropy
-
+from models.mnist import BackBone, Synapses, NLM
 class ContinousThoughtMachine(nn.Module):
     def __init__(self, 
         n_ticks: int,                                   # total number of ticks
@@ -17,9 +17,9 @@ class ContinousThoughtMachine(nn.Module):
         n_heads: int,                                   # number of heads for the attention
         d_output: int,                                  # output dimension
         
-        backbone: Type[nn.Module],
-        neuron_lvl_model: Type[nn.Module],
-        synapse_model: Type[nn.Module],
+        backbone: BackBone,
+        neuron_lvl_model: NLM,
+        synapse_model: Synapses,
         
         dropout: float = 0,
         # synapse_depth: int = 2,                       # UNET if > q else MLP
@@ -47,7 +47,7 @@ class ContinousThoughtMachine(nn.Module):
         self.n_heads = n_heads
 
         # --- Input and Attention ---
-        self.backbone: nn.Module = backbone(self.d_input)
+        self.backbone: BackBone = self.get_backbone(backbone)
 
         # Initializing the Q and KV projectors, and attention Module
         self.q_proj = nn.LazyLinear(self.d_input) # Initializes a weight matrix with [... , d_input] & works on the Synchronized Embeddings
@@ -60,8 +60,8 @@ class ContinousThoughtMachine(nn.Module):
         ) # This module uses W_q, W_k, W_v internally and projects to embed_dim Check the forward() method for more!
 
         # --- Core CTM Modules ---
-        self.synapses: nn.Module = synapse_model(self.d_model)
-        self.history_processor: nn.Module = neuron_lvl_model(self.d_model, self.d_memory)
+        self.synapses: Synapses = self.get_synapses(synapse_model)
+        self.history_processor: NLM = self.get_neuron_lvl_models(neuron_lvl_model)
 
         # --- Init Pre-activations & their history/trace as params ---
         # variance-scaled uniform initialization!! A practical methods to keep gradients stable
@@ -88,6 +88,18 @@ class ContinousThoughtMachine(nn.Module):
         # --- Output Projections ---
         self.d_output = d_output
         self.out_proj = nn.Sequential(nn.LazyLinear(self.d_output)) # No layer norm here? TODO: Check this
+    
+    def get_backbone(self, backbone: BackBone):
+        backbone._initialize(d_input=self.d_input)
+        return backbone
+
+    def get_synapses(self, synapses: Synapses):
+        synapses._initialize(d_model=self.d_model)
+        return synapses
+
+    def get_neuron_lvl_models(self, nlm: NLM):
+        nlm._initialize(d_memory=self.d_memory, d_model=self.d_model)
+        return nlm
 
     def calculate_sync_representation_size(self, n_sync):
         """
@@ -193,7 +205,7 @@ class ContinousThoughtMachine(nn.Module):
     
     def compute_kv(self, x: torch.Tensor):
         # x.shape : (B, C, H, W) OR (B, emb, seq_len)
-        input_features: torch.Tensor = self.backbone(x, True) # TODO: Make is more elegant the use of UNET
+        input_features: torch.Tensor = self.backbone(x) # TODO: Make is more elegant the use of UNET -> DONE!!
         kv = self.kv_proj(
             input_features
                 .flatten(start_dim=2) # (B, C, H*W) OR (B, emb, seq_len)
