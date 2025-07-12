@@ -1,3 +1,5 @@
+from collections import defaultdict
+from typing import Optional
 import torch
 import imageio
 import numpy as np
@@ -9,7 +11,25 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-def prepare_data(name, batch_size, path = "./data"):
+def unnormalize(name:str, image_array: np.ndarray):
+    if name == 'MNIST':
+        mean = np.array([0.0]).reshape(1, 1, 1)
+        std = np.array([1.0]).reshape(1, 1, 1)
+        img = (image_array* std + mean).transpose(1, 2, 0)
+    elif name == 'CIFAR10':
+        mean = np.array([0.4914, 0.4822, 0.4465]).reshape(3, 1, 1)
+        std = np.array([0.2023, 0.1994, 0.2010]).reshape(3, 1, 1)
+        img = (image_array* std + mean).transpose(1, 2, 0)
+    elif name == 'MNIST_COUNT':
+        mean = np.array([0.0]).reshape(1, 1, 1, 1) # [ticks, channels, H, W]
+        std = np.array([1.0]).reshape(1, 1, 1, 1)
+        img = (image_array* std + mean).transpose(0, 2, 3, 1)
+    else:
+        raise ValueError(f"Unnormalized is not defined for {name}")
+    img = np.clip(img * 255, 0, 255).astype(np.uint8)
+    return img
+
+def prepare_data(name:str , batch_size:int, n_ticks:Optional[int], path:str = "./data"):
     
     if name == 'MNIST':
         transform = transforms.Compose([
@@ -32,6 +52,53 @@ def prepare_data(name, batch_size, path = "./data"):
         test_data = datasets.CIFAR10(root=path, train=False, download=True, transform=transform)
         trainloader = torch.utils.data.DataLoader(train_data, batch_size, shuffle=True, num_workers=1)
         testloader = torch.utils.data.DataLoader(test_data, batch_size, shuffle=True, num_workers=1, drop_last=False)
+        return trainloader, testloader
+    elif name == 'MNIST_COUNT':
+        if n_ticks is None:
+            raise ValueError("n_ticks is required")
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+        ])
+        train_data = datasets.MNIST(root=path, train=True, download=True, transform=transform)
+        test_data = datasets.MNIST(root=path, train=False, download=True, transform=transform)
+        
+        def collate_running_mode_labels(batch):
+            images, labels = zip(*batch)
+            images = torch.stack(images)  # [B * n_ticks, 1, 28, 28]
+            labels = torch.tensor(labels) # [B * n_ticks]
+            
+            total = len(images)
+            valid_len = (total // n_ticks) * n_ticks  # truncate to multiple of n_ticks
+
+            if valid_len == 0:
+                return None  # batch too small to form even one sample
+
+            images = images[:valid_len]
+            labels = labels[:valid_len]
+
+            B = valid_len // n_ticks
+            images = images.view(B, n_ticks, 1, 28, 28)
+            labels = labels.view(B, n_ticks)
+
+            # Compute running mode with tie-breaking (larger number wins)
+            new_labels = []
+            for row in labels:
+                counts = defaultdict(int)
+                running_modes = []
+                for i in range(len(row)):
+                    counts[row[i].item()] += 1
+                    max_freq = max(counts.values())
+                    # find all items with max freq
+                    candidates = [k for k, v in counts.items() if v == max_freq]
+                    running_modes.append(max(candidates))  # break tie by max
+                new_labels.append(running_modes)
+
+            new_labels = torch.tensor(new_labels)  # [B, n_ticks]
+
+            return images, new_labels
+
+        trainloader = torch.utils.data.DataLoader(train_data, batch_size=batch_size*n_ticks, shuffle=True, num_workers=1, collate_fn=collate_running_mode_labels)
+        testloader = torch.utils.data.DataLoader(test_data, batch_size=batch_size*n_ticks, shuffle=True, num_workers=1, drop_last=False, collate_fn=collate_running_mode_labels)
         return trainloader, testloader
     else:
         raise ValueError(f"Dataset {name} not found")
@@ -59,8 +126,20 @@ def calculate_accuracy(predictions_logits: torch.Tensor, targets: torch.Tensor, 
     accuracy = (targets.detach().cpu().numpy() == preds_at_tick_class_idx).mean()
 
     return accuracy
-    
-def visualize_attention_map_with_images(model, input, label, label_text, device, path):
+
+def calculate_accuracy_mnist_count(predictions_logits: torch.Tensor, targets: torch.Tensor, most_certain_tick: torch.Tensor):
+    """ Calculate the Accuracy using the prediction at most certain tick"""
+    device = predictions_logits.device
+    B = predictions_logits.shape[0]
+    # TODO: Check why running following is giving CUDA OOM and not the one below that!!
+    # preds_at_tick_class_idx = predictions_logits[:, :, most_certain_tick].argmax(dim=1).detach().cpu().numpy() # Returns the idx for max prob class of shape (B)
+    preds_at_tick_class_idx = predictions_logits.argmax(1)[torch.arange(B, device=device), most_certain_tick].detach().cpu().numpy()
+    targets_at_tick_class_idx = targets[torch.arange(B, device=device), most_certain_tick].detach().cpu().numpy()
+    accuracy = (targets_at_tick_class_idx == preds_at_tick_class_idx).mean()
+
+    return accuracy
+
+def visualize_attention_map_with_images(name, model, input, label, label_text, device, path):
     
     if device == "cuda":
         import gc
@@ -96,6 +175,7 @@ def visualize_attention_map_with_images(model, input, label, label_text, device,
         
     for idx in range(total_len):
         create_gif(
+            name=name,
             image=input[idx],
             predictions=predictions[idx],
             certainties=certainties[idx],
@@ -106,7 +186,57 @@ def visualize_attention_map_with_images(model, input, label, label_text, device,
             fps=int(attention_tracking.shape[0]/(2.8)),
         )
 
+def visualize_attention_map_with_dynamic_images(name, model, input, label, label_text, device, path):
+    
+    if device == "cuda":
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    import os
+    if not os.path.exists(path):
+        os.mkdir(path)
+
+    total_len = input.shape[0]
+    assert label.shape[0] == total_len, "Number of Labels must be equal to number of inputs"
+
+    model = model.to(device)
+    model.eval()
+    predictions, certainties, (
+        pre_activations_tracking,
+        post_activation_tracking,
+        attention_tracking,             # [n_ticks, B, n_heads, n_channel, H*W]
+        sync_action_tracking,
+        sync_out_tracking
+    ) = model(input.to(device), track=True)
+    predictions = predictions.detach()
+    certainties = certainties.detach()
+    
+    n_ticks, B, n_heads, C, seq_len = attention_tracking.shape
+    print("Attention Shape: ", attention_tracking.shape)
+    H = int(seq_len ** 0.5)
+    while seq_len % H != 0: H -= 1
+    W = seq_len // H # To make compensate for non-square seq length
+    attention_tracking = np.reshape(attention_tracking, [n_ticks, B, n_heads, C, H, W])
+    #TODO: Interpolate the attention if not square ?? but why??
+        
+    for idx in range(total_len):
+        create_gif(
+            name=name,
+            image=input[idx],
+            predictions=predictions[idx],
+            certainties=certainties[idx],
+            attention_tracks=attention_tracking[:, idx, :, :, :],
+            label=label[idx],
+            label_text=label_text,
+            gif_path=f'{path}/output_{idx}.gif',
+            fps=int(attention_tracking.shape[0]/(20)),
+            dyn=True
+        )
+
+
 def create_gif(
+    name,
     image,
     predictions,
     certainties,
@@ -115,33 +245,36 @@ def create_gif(
     label_text,
     gif_path,
     fps=10,
-    max_heads=4
+    max_heads=4,
+    dyn=False
 ):
     num_classes, n_ticks = predictions.shape
     n_heads = attention_tracks.shape[1]
     H, W = attention_tracks.shape[-2:]
 
     # Unnormalize and prepare image
-    mean = np.array([0.4914, 0.4822, 0.4465]).reshape(3, 1, 1)
-    std = np.array([0.2023, 0.1994, 0.2010]).reshape(3, 1, 1)
-    img_tensor = image.cpu().numpy()
-    img = (img_tensor * std + mean).transpose(1, 2, 0)
-    img = np.clip(img * 255, 0, 255).astype(np.uint8)
+    img_array = image.cpu().numpy()
+    img = unnormalize(name=name, image_array=img_array)
     
     # Keep original image size for better quality
     RESIZED_X = 32
     RESIZED_Y = 32
     
-    img_resized = cv2.resize(img, (RESIZED_X, RESIZED_Y))
+    img_resized = None
 
     pred = F.softmax(predictions, dim=0).cpu().numpy()  # [num_classes, n_ticks]
     cert = certainties[1].cpu().numpy()  # [n_ticks]
-    correct_class = int(label)
 
     # path_coords = []
     frames = []
 
     for t in range(n_ticks):
+        img_tick = img[t] if dyn else img
+        correct_class = int(label[t]) if dyn else int(label)
+
+        if img_resized is None or dyn:
+            img_resized = cv2.resize(img_tick, (RESIZED_X, RESIZED_Y))
+
         # Create figure with tight layout and no padding
         fig = plt.figure(figsize=(12, 6), dpi=100, facecolor='white')
         fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05, wspace=0.15, hspace=0.15)
@@ -168,7 +301,10 @@ def create_gif(
         # path_coords.append((max_x, max_y))
 
         # Draw attention path lines on the image
-        ax_img.imshow(base_img)
+        if len(base_img.shape) == 2:
+            ax_img.imshow(base_img, cmap='gray')
+        else:
+            ax_img.imshow(base_img)
         # if len(path_coords) > 1:
         #     xs, ys = zip(*path_coords)
         #     ax_img.plot(xs, ys, color='cyan', linewidth=2)

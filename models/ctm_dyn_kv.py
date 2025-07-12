@@ -1,12 +1,12 @@
 import math
+from typing import Optional
 import torch
 import numpy as np
 import torch.nn as nn
-from typing import Optional
 
 from utils import compute_normalized_entropy
 from models.mnist import BackBone, Synapses, NLM
-class ContinousThoughtMachine(nn.Module):
+class ContinousThoughtMachineDyn(nn.Module):
     def __init__(self, 
         n_ticks: int,                                   # total number of ticks
         d_model: int,                                   # width of model / number of 'neurons'
@@ -30,7 +30,7 @@ class ContinousThoughtMachine(nn.Module):
         neuron_selection_type: str = 'random-pairing',
         n_random_pairing_self: int = 0                  # Number of neurons to select for self-to-self synch when random-pairing is used.
     ):
-        super(ContinousThoughtMachine, self).__init__()
+        super(ContinousThoughtMachineDyn, self).__init__()
         # --- Core Parameters ---
 
         # Model Neuron Parameters 
@@ -214,7 +214,7 @@ class ContinousThoughtMachine(nn.Module):
         return kv # (B, H*W, d_input) OR (B, seq_len, d_input)
 
     def forward(self, x: torch.Tensor, track: bool = False):
-        # x could be of dimension (B, d_emb, seq_len) OR (B, C, H, W)
+        # x could be of dimension (B, n_ticks, d_emb, seq_len) OR (B, n_ticks, C, H, W)
         B = x.size(0)
         device = x.device
 
@@ -225,10 +225,6 @@ class ContinousThoughtMachine(nn.Module):
         sync_out_tracking = []          #TODO: find out how is this useful -> How one neuron activation impacts other neuron's acivations
         sync_action_tracking = []       #TODO: find out how is this useful
         
-        # --- Getting the KV for STATIC input data --- # NOTE for dynamic data this has to be either cached or computed at each tick!
-        kv = self.compute_kv(x)
-        # This is what typically cached for speed-ups
-
         # --- Initialize the temporal states z_0 & A_0---
         # NOTE We are using expand instead of repeat as done in loss_mnist fn because here the dimension to be expanded is 1 and since expand works on dim=1 so that it does'nt have to assign new memory, the memory is kept same as that of initial.
         activated_state = self.get_parameter('initial_activated_state').unsqueeze(0).expand((B, -1)) # (B, d_model)
@@ -254,6 +250,9 @@ class ContinousThoughtMachine(nn.Module):
         
         # --- Temporal Loop ---
         for tick in range(self.n_ticks):
+            # --- Getting the KV for DYNAMIC input data --- #NOTE: NOT CACHING IT RN
+            kv = self.compute_kv(x[:, tick, ...]) # Running the KV for current tick's input
+
             # --- Calculate the Synchronization Action --- 
             sync_action, decay_alpha_action, decay_beta_action = self.compute_synchronisation(activated_state, decay_alpha_action, decay_beta_action, r_action, sync_type='action')
             # sync_action (S_action): (B, sync_action_repr_size)
@@ -306,4 +305,4 @@ class ContinousThoughtMachine(nn.Module):
         
 
 
-            
+ 

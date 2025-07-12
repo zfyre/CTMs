@@ -287,6 +287,8 @@ if __name__ == "__main__":
     parser.add_argument("--path", type=str, default="./data")
     
     # Backbone Parameters
+    parser.add_argument("--backbone", type=str, help="The path of the Backbone model")
+    parser.add_argument("--backbone_config", type=str, help="The path of the Backbone args config")
     parser.add_argument("--use_unet", type=bool, default=True)
     
     # Syanpses Parameters
@@ -331,13 +333,43 @@ if __name__ == "__main__":
     assert(args.num_ticks >= args.num_memory)
     
     # backbone, synapses, nlm model's configuration will be modified accordingly inside CTM hence initialized with 'zeros'
-    backbone = BackBone(d_input=args.numd_input, use_unet=args.use_unet)
-    synapses = Synapses(d_model=args.numd_model)
+    if args.backbone:
+        print(f"Loading backbone from path={args.backbone}")
+        backbone_data = torch.load(args.backbone, map_location=device)
+        if isinstance(backbone_data, BackBone):
+            backbone = backbone_data
+        else:
+            if not args.backbone_config:
+                raise ValueError("Need the Backbone Config to load model from state_dict()")
+            with open(args.backbone_config, 'r') as f:
+                backbone_config = json.load(f)
+            backbone = BackBone(
+                d_input=backbone_config['backbone_config']['d_input'],
+                use_unet=backbone_config['backbone_config']['use_unet']
+            )
+            backbone.load_state_dict(backbone_data)
+
+        backbone = backbone.to(device)
+        # Freeze all layers
+        for param in backbone.parameters():
+            param.requires_grad = False
+        backbone.eval()
+        print(backbone)
+    else:
+        print(f"Initializing a new backbone with UNET={args.use_unet}")
+        backbone = BackBone(
+            d_input=args.numd_input,
+            use_unet=args.use_unet
+        ).to(device)
+    
+    synapses = Synapses(
+        d_model=args.numd_model
+    ).to(device)
     nlm = NLM(
         d_memory=args.num_memory,
         d_model=args.numd_model,
         memory_hidden_dims=args.numd_hidden_mem
-    )
+    ).to(device)
     model = ContinousThoughtMachine(
         n_ticks = args.num_ticks,
         d_model = args.numd_model,
@@ -354,14 +386,17 @@ if __name__ == "__main__":
         neuron_selection_type = args.selection_type,
         n_random_pairing_self = args.num_rand_self_pair,
     ).to(device)
-    
+    print("Overall Model Parameters: ")
+    for name, param in model.named_parameters():
+        print(f"{name}: requires_grad = {param.requires_grad}")
+
     # --- Save Model Configuration ---
     config_path = save_model_config(run_dir, model, args)
     print(f"Model configuration saved at: {config_path}")
     
     # --- Train Model ---
     print("Starting training...")
-    model, (train_losses_list, least_loss_tick_list, most_certain_tick_list) =train_classifier(
+    model, (train_losses_list, least_loss_tick_list, most_certain_tick_list) = train_classifier(
         model=model, 
         train_loader=trainloader, 
         test_loader=testloader, 

@@ -33,7 +33,8 @@
 import json
 import torch
 import argparse
-from utils import prepare_data, visualize_attention_map_with_images
+from models.ctm_dyn_kv import ContinousThoughtMachineDyn
+from utils import prepare_data, visualize_attention_map_with_dynamic_images, visualize_attention_map_with_images
 from models.ctm import ContinousThoughtMachine
 from models.mnist import Synapses, BackBone, NLM
 
@@ -47,34 +48,40 @@ args = parser.parse_args()
 with open(f'{args.run}/config.json', 'r') as f:
     config = json.load(f)
 training_args = config['training_args']
+backbone_args = config['backbone_config']
+synapse_args = config['synapses_config']
+nlm_args = config['nlm_config']
+model_args = config['model_config']
 
 if training_args['name'] == 'MNIST':
     label_text = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 elif training_args['name'] == 'CIFAR10':
     label_text = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+elif training_args['name'] == 'MNIST_COUNT':
+    label_text = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 else:
     raise ValueError(f"No labels-text for {training_args['name']}")
 
 # Load the dataset
-_, testloader = prepare_data(training_args['name'], batch_size=args.num_images)
+_, testloader = prepare_data(training_args['name'], batch_size=args.num_images, n_ticks=model_args['n_ticks'])
 image, label = next(iter(testloader))
 
 # Load the Models
-backbone_args = config['backbone_config']
 backbone = BackBone(d_input=backbone_args['d_input'], use_unet=backbone_args['use_unet'])
 
-synapse_args = config['synapses_config']
 synapses = Synapses(d_model=synapse_args['d_model'])
 
-nlm_args = config['nlm_config']
 nlm = NLM(
     d_memory=nlm_args['d_memory'],
     d_model=nlm_args['d_model'],
     memory_hidden_dims=nlm_args['memory_hidden_dims']
 )
+if training_args['name'] == 'MNIST_COUNT':
+    ctm_type = ContinousThoughtMachineDyn
+else:
+    ctm_type = ContinousThoughtMachine
 
-model_args = config['model_config']
-model = ContinousThoughtMachine(
+model = ctm_type(
     n_ticks = model_args['n_ticks'],
     d_model = model_args['d_model'],
     d_memory = model_args['d_memory'],
@@ -97,5 +104,8 @@ state_dict = torch.load(model_weights_path)
 model.load_state_dict(state_dict)
 
 device = "cuda"
-visualize_attention_map_with_images(model, image, label, label_text, device, path=f'{args.run}/viz')
+if training_args['name'] == 'MNIST_COUNT':
+    visualize_attention_map_with_dynamic_images(training_args['name'], model, image, label, label_text, device, path=f'{args.run}/viz')
+else:
+    visualize_attention_map_with_images(training_args['name'], model, image, label, label_text, device, path=f'{args.run}/viz')
 

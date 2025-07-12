@@ -7,10 +7,10 @@ from datetime import datetime
 # import matplotlib
 # matplotlib.use('Agg')  # Use Anti-Grain Geometry backend (no GUI)
 import matplotlib.pyplot as plt
-from models.ctm import ContinousThoughtMachine
+from models.ctm_dyn_kv import ContinousThoughtMachineDyn
 from models.mnist import BackBone, NLM, Synapses
 from utils import prepare_data
-from train import train_classifier
+from train import train_mnist_count
 
 def create_run_directory(base_path="./data/runs"):
     """Create a unique timestamped directory for this run."""
@@ -288,6 +288,8 @@ if __name__ == "__main__":
     
     # Backbone Parameters
     parser.add_argument("--use_unet", type=bool, default=True)
+    parser.add_argument("--backbone", type=str)
+    parser.add_argument("--backbone_config", type=str)
     
     # Syanpses Parameters
 
@@ -325,20 +327,48 @@ if __name__ == "__main__":
     
     # --- Prepare Data ---
     print(f"Preparing {args.name} Dataset")
-    trainloader, testloader = prepare_data(args.name, args.batch_size, args.path)
+    trainloader, testloader = prepare_data(args.name, args.batch_size, args.num_ticks, args.path)
     
     # --- Prepare Model ---
     assert(args.num_ticks >= args.num_memory)
     
     # backbone, synapses, nlm model's configuration will be modified accordingly inside CTM hence initialized with 'zeros'
-    backbone = BackBone(d_input=args.numd_input, use_unet=args.use_unet)
+    if args.backbone:
+        print(f"Loading backbone from path={args.backbone}")
+        backbone_data = torch.load(args.backbone, map_location=device)
+        if isinstance(backbone_data, BackBone):
+            backbone = backbone_data
+        else:
+            if not args.backbone_config:
+                raise ValueError("Need the Backbone Config to load model from state_dict()")
+            with open(args.backbone_config, 'r') as f:
+                backbone_config = json.load(f)
+            backbone = BackBone(
+                d_input=backbone_config['backbone_config']['d_input'],
+                use_unet=backbone_config['backbone_config']['use_unet']
+            )
+            backbone.load_state_dict(backbone_data)
+
+        backbone = backbone.to(device)
+        # Freeze all layers
+        for param in backbone.parameters():
+            param.requires_grad = False
+        backbone.eval()
+        print(backbone)
+    else:
+        print(f"Initializing a new backbone with UNET={args.use_unet}")
+        backbone = BackBone(
+            d_input=args.numd_input,
+            use_unet=args.use_unet
+        ).to(device)
+
     synapses = Synapses(d_model=args.numd_model)
     nlm = NLM(
         d_memory=args.num_memory,
         d_model=args.numd_model,
         memory_hidden_dims=args.numd_hidden_mem
     )
-    model = ContinousThoughtMachine(
+    model = ContinousThoughtMachineDyn(
         n_ticks = args.num_ticks,
         d_model = args.numd_model,
         d_memory = args.num_memory,
@@ -361,7 +391,7 @@ if __name__ == "__main__":
     
     # --- Train Model ---
     print("Starting training...")
-    model, (train_losses_list, least_loss_tick_list, most_certain_tick_list) =train_classifier(
+    model, (train_losses_list, least_loss_tick_list, most_certain_tick_list) = train_mnist_count(
         model=model, 
         train_loader=trainloader, 
         test_loader=testloader, 
