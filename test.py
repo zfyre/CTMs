@@ -64,6 +64,8 @@ elif dataset_name == 'CIFAR10':
     label_text = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
 elif dataset_name == 'MNIST_COUNT':
     label_text = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
+elif dataset_name == 'CIFAR10_COUNT':
+    label_text = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
 else:
     raise ValueError(f"No labels-text for {dataset_name}")
 
@@ -81,7 +83,7 @@ nlm = NLM(
     d_model=nlm_args['d_model'],
     memory_hidden_dims=nlm_args['memory_hidden_dims']
 )
-if training_args['name'] == 'MNIST_COUNT':
+if '_COUNT' in training_args['name']:
     ctm_type = ContinousThoughtMachineDyn
 else:
     ctm_type = ContinousThoughtMachine
@@ -109,7 +111,7 @@ state_dict = torch.load(model_weights_path)
 model.load_state_dict(state_dict)
 
 device = "cuda"
-if dataset_name == 'MNIST_COUNT':
+if '_COUNT' in dataset_name:
     visualize_attention_map_with_dynamic_images(dataset_name, model, image, label, label_text, device, path=f'{args.run}/viz')
 else:
     visualize_attention_map_with_images(dataset_name, model, image, label, label_text, device, path=f'{args.run}/viz')

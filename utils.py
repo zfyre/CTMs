@@ -84,7 +84,7 @@ def prepare_data(name:str , batch_size:int, n_ticks:Optional[int], path:str = ".
                 mean=[0.4914, 0.4822, 0.4465],
                 std=[0.2470, 0.2435, 0.2616]
             ),
-            transforms.Resize([28, 28])
+            transforms.Resize([28, 28]) #NOTE: Resizing for GPU to reduce the training time
         ])
         train_data = datasets.CIFAR10(root=path, train=True, download=True, transform=transform)
         test_data = datasets.CIFAR10(root=path, train=False, download=True, transform=transform)
