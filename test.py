@@ -39,7 +39,7 @@ from models.mnist import Synapses, BackBone, NLM
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--run", type=str, help="path of the run")
+parser.add_argument("--run", type=str, required=True, help="path of the run")
 parser.add_argument("--num_images", type=int, help="number of images to run visualization on", default=1)
 args = parser.parse_args()
 
@@ -52,6 +52,8 @@ if training_args['name'] == 'MNIST':
     label_text = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 elif training_args['name'] == 'CIFAR10':
     label_text = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
+else:
+    raise ValueError(f"No labels-text for {training_args['name']}")
 
 # Load the dataset
 _, testloader = prepare_data(training_args['name'], batch_size=args.num_images)

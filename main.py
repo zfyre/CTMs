@@ -246,9 +246,10 @@ def create_plots(run_dir, train_losses_list, least_loss_tick_list, most_certain_
     
     return plots_created
 
-def save_summary(run_dir, config_path, model_path, full_model_path, metrics_path, final_model_info_path, plots_created):
+def save_summary(desc, run_dir, config_path, model_path, full_model_path, metrics_path, final_model_info_path, plots_created):
     """Save a summary of all saved files."""
     summary = {
+        "description": desc,
         "run_directory": run_dir,
         "files_saved": {
             "config": config_path,
@@ -269,6 +270,7 @@ def save_summary(run_dir, config_path, model_path, full_model_path, metrics_path
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("-m","--message", type=str, required=True, help="short description of the run")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cuda")
 
@@ -317,6 +319,7 @@ if __name__ == "__main__":
     print(f"Created run directory: {run_dir}")
     
     # --- Prepare Data ---
+    print(f"Preparing {args.name} Dataset")
     trainloader, testloader = prepare_data(args.name, args.batch_size, args.path)
     
     # --- Prepare Model ---
@@ -382,7 +385,7 @@ if __name__ == "__main__":
         print("No plots created (empty training losses)")
     
     # --- Save Run Summary ---
-    summary_path = save_summary(run_dir, config_path, model_path, full_model_path, metrics_path, final_model_info_path, plots_created)
+    summary_path = save_summary(args.message, run_dir, config_path, model_path, full_model_path, metrics_path, final_model_info_path, plots_created)
     print(f"Run summary saved at: {summary_path}")
     
     print(f"\n{'='*60}")
