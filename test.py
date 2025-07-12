@@ -34,7 +34,8 @@ import json
 import torch
 import argparse
 from models.ctm_dyn_kv import ContinousThoughtMachineDyn
-from utils import prepare_data, visualize_attention_map_with_dynamic_images, visualize_attention_map_with_images
+from utils import prepare_data
+from visual_utils import visualize_attention_map_with_dynamic_images, visualize_attention_map_with_images
 from models.ctm import ContinousThoughtMachine
 from models.mnist import Synapses, BackBone, NLM
 
@@ -42,6 +43,7 @@ from models.mnist import Synapses, BackBone, NLM
 parser = argparse.ArgumentParser()
 parser.add_argument("--run", type=str, required=True, help="path of the run")
 parser.add_argument("--num_images", type=int, help="number of images to run visualization on", default=1)
+parser.add_argument("--dataset", type=str, help="Datset to visualize this run on")
 args = parser.parse_args()
 
 # Load the config
@@ -53,17 +55,20 @@ synapse_args = config['synapses_config']
 nlm_args = config['nlm_config']
 model_args = config['model_config']
 
-if training_args['name'] == 'MNIST':
+# Getting the Dataset to test this run on, Ex. when running the MNIST_COUNT model on MNIST classifier
+dataset_name = training_args['name'] if args.dataset is None else args.dataset
+
+if dataset_name == 'MNIST':
     label_text = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
-elif training_args['name'] == 'CIFAR10':
+elif dataset_name == 'CIFAR10':
     label_text = ['airplane', 'automobile', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck']
-elif training_args['name'] == 'MNIST_COUNT':
+elif dataset_name == 'MNIST_COUNT':
     label_text = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9']
 else:
-    raise ValueError(f"No labels-text for {training_args['name']}")
+    raise ValueError(f"No labels-text for {dataset_name}")
 
 # Load the dataset
-_, testloader = prepare_data(training_args['name'], batch_size=args.num_images, n_ticks=model_args['n_ticks'])
+_, testloader = prepare_data(dataset_name, batch_size=args.num_images, n_ticks=model_args['n_ticks'])
 image, label = next(iter(testloader))
 
 # Load the Models
@@ -104,8 +109,8 @@ state_dict = torch.load(model_weights_path)
 model.load_state_dict(state_dict)
 
 device = "cuda"
-if training_args['name'] == 'MNIST_COUNT':
-    visualize_attention_map_with_dynamic_images(training_args['name'], model, image, label, label_text, device, path=f'{args.run}/viz')
+if dataset_name == 'MNIST_COUNT':
+    visualize_attention_map_with_dynamic_images(dataset_name, model, image, label, label_text, device, path=f'{args.run}/viz')
 else:
-    visualize_attention_map_with_images(training_args['name'], model, image, label, label_text, device, path=f'{args.run}/viz')
+    visualize_attention_map_with_images(dataset_name, model, image, label, label_text, device, path=f'{args.run}/viz')
 

@@ -213,7 +213,7 @@ class ContinousThoughtMachineDyn(nn.Module):
         )                             
         return kv # (B, H*W, d_input) OR (B, seq_len, d_input)
 
-    def forward(self, x: torch.Tensor, track: bool = False):
+    def forward(self, x: torch.Tensor, track: bool = False, static_input: bool = False):
         # x could be of dimension (B, n_ticks, d_emb, seq_len) OR (B, n_ticks, C, H, W)
         B = x.size(0)
         device = x.device
@@ -225,6 +225,10 @@ class ContinousThoughtMachineDyn(nn.Module):
         sync_out_tracking = []          #TODO: find out how is this useful -> How one neuron activation impacts other neuron's acivations
         sync_action_tracking = []       #TODO: find out how is this useful
         
+        # --- Getting the KV for STATIC input data --- # NOTE for dynamic data this has to be either cached or computed at each tick!
+        if static_input:
+            kv = self.compute_kv(x)
+
         # --- Initialize the temporal states z_0 & A_0---
         # NOTE We are using expand instead of repeat as done in loss_mnist fn because here the dimension to be expanded is 1 and since expand works on dim=1 so that it does'nt have to assign new memory, the memory is kept same as that of initial.
         activated_state = self.get_parameter('initial_activated_state').unsqueeze(0).expand((B, -1)) # (B, d_model)
@@ -251,7 +255,8 @@ class ContinousThoughtMachineDyn(nn.Module):
         # --- Temporal Loop ---
         for tick in range(self.n_ticks):
             # --- Getting the KV for DYNAMIC input data --- #NOTE: NOT CACHING IT RN
-            kv = self.compute_kv(x[:, tick, ...]) # Running the KV for current tick's input
+            if not static_input:
+                kv = self.compute_kv(x[:, tick, ...]) # Running the KV for current tick's input
 
             # --- Calculate the Synchronization Action --- 
             sync_action, decay_alpha_action, decay_beta_action = self.compute_synchronisation(activated_state, decay_alpha_action, decay_beta_action, r_action, sync_type='action')
